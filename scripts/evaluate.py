@@ -2,15 +2,9 @@ import argparse
 import torch
 from models.puzzle_solver import PuzzleSolver
 from data.datasets.multi_domain_dataset import MultiDomainDataset
-from evaluators.metrics.accuracy_metrics import AccuracyMetrics
-from evaluators.metrics.image_quality_metrics import ImageQualityMetrics
-from evaluators.metrics.semantic_metrics import SemanticMetrics
+from utils.metrics import calculate_accuracy, calculate_psnr, calculate_ssim
 
 def evaluate(model, dataloader, device):
-    accuracy_metrics = AccuracyMetrics()
-    image_quality_metrics = ImageQualityMetrics()
-    semantic_metrics = SemanticMetrics()
-
     model.eval()
     total_accuracy = 0
     total_top_k_accuracy = 0
@@ -28,10 +22,10 @@ def evaluate(model, dataloader, device):
 
             position_logits, relation_logits, reconstructed_image = model(image_patches)
 
-            accuracy = accuracy_metrics.compute_accuracy(position_logits, labels)
+            accuracy = calculate_accuracy(position_logits, labels)
             top_k_accuracy = accuracy_metrics.compute_top_k_accuracy(position_logits, labels)
-            psnr = image_quality_metrics.compute_psnr(reconstructed_image, image_patches)
-            ssim = image_quality_metrics.compute_ssim(reconstructed_image, image_patches)
+            psnr = calculate_psnr(reconstructed_image, image_patches)
+            ssim = calculate_ssim(reconstructed_image, image_patches)
             lpips = image_quality_metrics.compute_lpips(reconstructed_image, image_patches)
             semantic_consistency = semantic_metrics.compute_semantic_consistency(reconstructed_image, image_patches)
 
