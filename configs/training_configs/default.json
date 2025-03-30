@@ -1,0 +1,33 @@
+{
+  "batch_size": 64,
+  "num_epochs": 100,
+  "optimizer": {
+    "name": "adam",
+    "lr": 0.0001,
+    "weight_decay": 0.0001
+  },
+  "scheduler": {
+    "name": "cosine",
+    "T_max": 100,
+    "eta_min": 0.00001,
+    "warmup_epochs": 10
+  },
+  "loss_weights": {
+    "position_loss": 1.0,
+    "relation_loss": 0.5,
+    "reconstruction_loss": 0.3
+  },
+  "checkpoint_interval": 5,
+  "early_stopping": {
+    "patience": 10,
+    "min_delta": 0.001
+  },
+  "curriculum": {
+    "enabled": true,
+    "stages": [
+      {"epoch": 0, "grid_size": 4, "difficulty": "easy"},
+      {"epoch": 30, "grid_size": 6, "difficulty": "medium"},
+      {"epoch": 60, "grid_size": 8, "difficulty": "hard"}
+    ]
+  }
+}
