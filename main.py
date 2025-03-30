@@ -7,6 +7,7 @@ from data.datasets.multi_domain_dataset import MultiDomainDataset
 from trainers.curriculum_trainer import CurriculumTrainer
 from utils.logging_utils import setup_logger, log_training_progress
 from utils.optimization import get_optimizer, get_scheduler
+from utils.config import ConfigManager
 
 def main(config):
     # Set up logging
@@ -21,7 +22,15 @@ def main(config):
     val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=config['batch_size'], shuffle=False)
 
     # Initialize model
-    model = PuzzleSolver(config['model'])
+    model = PuzzleSolver(
+        img_size=config["img_size"],
+        patch_size=config["patch_size"],
+        num_classes=config["num_classes"],
+        embed_dim=config["embed_dim"],
+        depth=config["depth"],
+        num_heads=config["num_heads"],
+        # 其他参数...
+    )
 
     # Set up optimizer and scheduler
     optimizer = get_optimizer(model, config['optimizer']['name'], config['optimizer']['lr'], config['optimizer']['weight_decay'])
@@ -50,7 +59,11 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     # Load configuration
-    with open(args.config, 'r') as f:
-        config = json.load(f)
+    config_manager = ConfigManager()
+    config = config_manager.get_experiment_config(
+        model_name=args.model_config,
+        data_name=args.data_config,
+        training_name=args.training_config
+    )
 
     main(config)

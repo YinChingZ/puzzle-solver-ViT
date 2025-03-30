@@ -7,8 +7,17 @@ from data.datasets.multi_domain_dataset import MultiDomainDataset
 from trainers.curriculum_trainer import CurriculumTrainer
 from utils.logging_utils import setup_logger, log_training_progress
 from utils.optimization import get_optimizer, get_scheduler
+from utils.config import ConfigManager
 
-def main(config):
+def main(args):
+    # 加载配置
+    config_manager = ConfigManager()
+    config = config_manager.get_experiment_config(
+        model_name=args.model_config,
+        data_name=args.data_config,
+        training_name=args.training_config
+    )
+
     # Set up logging
     logger = setup_logger('train_logger', os.path.join(config['log_dir'], 'train.log'))
 
@@ -21,7 +30,15 @@ def main(config):
     val_loader = DataLoader(val_dataset, batch_size=config['batch_size'], shuffle=False)
 
     # Initialize model
-    model = PuzzleSolver(config['model'])
+    model = PuzzleSolver(
+        img_size=config["img_size"],
+        patch_size=config["patch_size"],
+        num_classes=config["num_classes"],
+        embed_dim=config["embed_dim"],
+        depth=config["depth"],
+        num_heads=config["num_heads"],
+        # 其他参数...
+    )
 
     # Set up optimizer and scheduler
     optimizer = get_optimizer(model, config['optimizer']['name'], config['optimizer']['lr'], config['optimizer']['weight_decay'])
@@ -46,11 +63,9 @@ def main(config):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Train the Vision Transformer-based puzzle solver.')
-    parser.add_argument('--config', type=str, required=True, help='Path to the configuration file.')
+    parser.add_argument('--model_config', type=str, default='base', help='Name of the model configuration.')
+    parser.add_argument('--data_config', type=str, default='default', help='Name of the data configuration.')
+    parser.add_argument('--training_config', type=str, default='default', help='Name of the training configuration.')
     args = parser.parse_args()
 
-    # Load configuration
-    with open(args.config, 'r') as f:
-        config = json.load(f)
-
-    main(config)
+    main(args)
