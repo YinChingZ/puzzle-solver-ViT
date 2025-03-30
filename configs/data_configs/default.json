@@ -16,5 +16,7 @@
     "natural_images",
     "artwork",
     "documents"
-  ]
+  ],
+  "train_dirs": ["path/to/train/data"],
+  "val_dirs": ["path/to/val/data"]
 }
