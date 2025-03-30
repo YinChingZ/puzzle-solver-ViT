@@ -5,8 +5,6 @@ from data.datasets.multi_domain_dataset import MultiDomainDataset
 from evaluators.metrics.accuracy_metrics import AccuracyMetrics
 from evaluators.metrics.image_quality_metrics import ImageQualityMetrics
 from evaluators.metrics.semantic_metrics import SemanticMetrics
-from utils.config import ConfigManager
-from utils.metrics import calculate_accuracy, calculate_psnr, calculate_ssim
 
 def evaluate(model, dataloader, device):
     accuracy_metrics = AccuracyMetrics()
@@ -30,10 +28,10 @@ def evaluate(model, dataloader, device):
 
             position_logits, relation_logits, reconstructed_image = model(image_patches)
 
-            accuracy = calculate_accuracy(position_logits, labels)
+            accuracy = accuracy_metrics.compute_accuracy(position_logits, labels)
             top_k_accuracy = accuracy_metrics.compute_top_k_accuracy(position_logits, labels)
-            psnr = calculate_psnr(reconstructed_image, image_patches)
-            ssim = calculate_ssim(reconstructed_image, image_patches)
+            psnr = image_quality_metrics.compute_psnr(reconstructed_image, image_patches)
+            ssim = image_quality_metrics.compute_ssim(reconstructed_image, image_patches)
             lpips = image_quality_metrics.compute_lpips(reconstructed_image, image_patches)
             semantic_consistency = semantic_metrics.compute_semantic_consistency(reconstructed_image, image_patches)
 
@@ -63,35 +61,24 @@ def evaluate(model, dataloader, device):
 
 def main():
     parser = argparse.ArgumentParser(description='Evaluate the puzzle solver model.')
-    parser.add_argument('--model_config', type=str, required=True, help='Model configuration name.')
-    parser.add_argument('--checkpoint_path', type=str, required=True, help='Path to the trained model checkpoint.')
-    parser.add_argument('--data_config', type=str, required=True, help='Data configuration name.')
+    parser.add_argument('--model_path', type=str, required=True, help='Path to the trained model.')
+    parser.add_argument('--data_path', type=str, required=True, help='Path to the evaluation dataset.')
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size for evaluation.')
-    parser.add_argument('--output_dir', type=str, required=True, help='Directory to save evaluation results.')
-    parser.add_argument('--visualize', action='store_true', help='Generate visualizations.')
     parser.add_argument('--device', type=str, default='cpu', help='Device to run the evaluation on.')
     args = parser.parse_args()
 
     device = torch.device(args.device)
-    config_manager = ConfigManager()
-    model_config = config_manager.load_config("model", args.model_config)
-    data_config = config_manager.load_config("data", args.data_config)
-
-    model = PuzzleSolver(**model_config)
-    model.load_state_dict(torch.load(args.checkpoint_path, map_location=device))
+    model = PuzzleSolver()
+    model.load_state_dict(torch.load(args.model_path, map_location=device))
     model.to(device)
 
-    dataset = MultiDomainDataset(data_config['data_dirs'])
+    dataset = MultiDomainDataset(args.data_path)
     dataloader = torch.utils.data.DataLoader(dataset, batch_size=args.batch_size, shuffle=False)
 
     metrics = evaluate(model, dataloader, device)
 
     for metric, value in metrics.items():
         print(f'{metric}: {value}')
-
-    if args.visualize:
-        # Generate and save visualizations
-        pass
 
 if __name__ == '__main__':
     main()
