@@ -27,38 +27,64 @@ class PatchGenerator:
             patches: 拼图块张量
             positions: (如果return_positions=True) 位置索引
         """
-        # 1. 检查输入类型，必要时进行转换
-        if isinstance(image, Image.Image):
-            image = transforms.ToTensor()(image).unsqueeze(0)
+        # 转换输入为张量
+        if isinstance(image, str):  # 文件路径
+            image = Image.open(image).convert('RGB')
+            transform = transforms.ToTensor()
+            image = transform(image)
+        elif isinstance(image, Image.Image):  # PIL图像
+            transform = transforms.ToTensor()
+            image = transform(image)
+        elif isinstance(image, np.ndarray):  # NumPy数组
+            image = torch.from_numpy(image.transpose(2, 0, 1)).float() / 255.0
         elif isinstance(image, torch.Tensor):
-            if image.dim() == 3:
-                image = image.unsqueeze(0)
+            # 确保图像格式为[C, H, W]或[B, C, H, W]
+            if image.dim() == 4:  # 批次格式
+                pass
+            elif image.dim() == 3:  # 单图像格式
+                image = image.unsqueeze(0)  # 添加批次维度
+            else:
+                raise ValueError(f"Unexpected tensor dimensions: {image.shape}")
         else:
-            raise TypeError("Unsupported image type. Expected PIL Image or torch.Tensor.")
+            raise TypeError(f"Unsupported image type: {type(image)}")
         
-        batch_size, channels, height, width = image.size()
+        # 获取批次大小和图像尺寸
+        batch_size, channels, height, width = image.shape
         
-        # 2. 计算块尺寸
-        if self.patch_size is None:
-            self.patch_size = min(height, width) // self.grid_size
+        # 计算块大小
+        patch_h = height // self.grid_size
+        patch_w = width // self.grid_size
         
+        # 创建拼图块和位置索引
         patches = []
         positions = []
         
-        # 3. 分割图像
-        for i in range(self.grid_size):
-            for j in range(self.grid_size):
-                patch = image[:, :, i * self.patch_size:(i + 1) * self.patch_size, j * self.patch_size:(j + 1) * self.patch_size]
-                patches.append(patch)
-                if return_positions:
-                    positions.append((i, j))
+        for b in range(batch_size):
+            batch_patches = []
+            batch_positions = []
+            
+            for i in range(self.grid_size):
+                for j in range(self.grid_size):
+                    # 提取拼图块
+                    y_start = i * patch_h
+                    y_end = (i + 1) * patch_h
+                    x_start = j * patch_w
+                    x_end = (j + 1) * patch_w
+                    
+                    patch = image[b, :, y_start:y_end, x_start:x_end]
+                    batch_patches.append(patch)
+                    
+                    # 记录位置索引
+                    pos = i * self.grid_size + j
+                    batch_positions.append(pos)
+            
+            patches.append(torch.stack(batch_patches))
+            positions.append(torch.tensor(batch_positions))
         
-        patches = torch.cat(patches, dim=0)
+        # 组合批次中的所有拼图块和位置
+        patches = torch.stack(patches)  # [B, N, C, H', W']
+        positions = torch.stack(positions)  # [B, N]
         
-        # 4. 生成位置索引
         if return_positions:
-            positions = torch.tensor(positions)
             return patches, positions
-        
-        # 5. 返回结果
         return patches
