@@ -28,5 +28,5 @@ class PuzzleSolver(nn.Module):
         x = self.transformer_encoder(x)
         position_logits = self.position_head(x)
         relation_logits = self.relation_head(x)
-        reconstructed_image = self.reconstruction_module(x)
+        reconstructed_image, confidence = self.reconstruction_module(x, position_logits, relation_logits)
         return position_logits, relation_logits, reconstructed_image
