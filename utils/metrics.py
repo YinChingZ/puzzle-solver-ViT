@@ -50,3 +50,37 @@ def calculate_ssim(pred_img, target_img):
     target_img_np = target_img.cpu().numpy()
     ssim = structural_similarity(target_img_np, pred_img_np, multichannel=True)
     return ssim
+
+def calculate_position_accuracy(position_logits, target_positions):
+    """
+    计算位置预测准确率
+
+    参数:
+        position_logits: 位置预测的logits
+        target_positions: 真实位置标签
+
+    返回:
+        position_accuracy: 位置预测准确率
+    """
+    _, position_preds = torch.max(position_logits, 1)
+    correct = (position_preds == target_positions).sum().item()
+    total = target_positions.size(0)
+    position_accuracy = correct / total
+    return position_accuracy
+
+def calculate_relationship_accuracy(relation_logits, target_relations):
+    """
+    计算关系预测准确率
+
+    参数:
+        relation_logits: 关系预测的logits
+        target_relations: 真实关系标签
+
+    返回:
+        relationship_accuracy: 关系预测准确率
+    """
+    _, relation_preds = torch.max(relation_logits, 1)
+    correct = (relation_preds == target_relations).sum().item()
+    total = target_relations.size(0)
+    relationship_accuracy = correct / total
+    return relationship_accuracy
