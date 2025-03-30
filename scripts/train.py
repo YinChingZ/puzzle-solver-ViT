@@ -21,9 +21,19 @@ def main(args):
     # Set up logging
     logger = setup_logger('train_logger', os.path.join(config['log_dir'], 'train.log'))
 
+    # Create directories for logs and checkpoints
+    os.makedirs(config['log_dir'], exist_ok=True)
+    os.makedirs(config['checkpoint_dir'], exist_ok=True)
+
     # Load datasets
-    train_dataset = MultiDomainDataset(config['data']['train'])
-    val_dataset = MultiDomainDataset(config['data']['val'])
+    train_dataset = MultiDomainDataset(
+        data_dirs=config['data']['train_dirs'],
+        transform=transform
+    )
+    val_dataset = MultiDomainDataset(
+        data_dirs=config['data']['val_dirs'],
+        transform=transform
+    )
 
     # Create data loaders
     train_loader = DataLoader(train_dataset, batch_size=config['batch_size'], shuffle=True)
