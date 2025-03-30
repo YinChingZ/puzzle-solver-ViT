@@ -28,12 +28,14 @@ class CNNFeatureExtractor(nn.Module):
         self.pooling_layers = nn.ModuleList(self.pooling_layers)
 
     def forward(self, x):
-        residual = x
+        original_input = x.clone()
         x = F.relu(self.bn1(self.conv1(x)))
+        residual1 = x.clone()
         x = self.pool(x)
         x = self.dropout_layer(x)
 
         x = F.relu(self.bn2(self.conv2(x)))
+        residual2 = x.clone()
         x = self.pool(x)
         x = self.dropout_layer(x)
 
@@ -41,9 +43,10 @@ class CNNFeatureExtractor(nn.Module):
         x = self.pool(x)
         x = self.dropout_layer(x)
 
-        x += residual  # Residual connection
+        x += F.interpolate(original_input, size=x.shape[2:])  # Residual connection
 
         # Adjust output format to ensure compatibility with ViT encoder
-        x = x.view(x.size(0), -1)
+        b, c, h, w = x.shape
+        x = x.view(b, c, h * w).permute(0, 2, 1)
 
         return x
