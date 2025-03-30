@@ -1,3 +1,6 @@
+# main.py
+"""主应用入口点，接受单一配置文件路径，适用于使用预定义配置进行训练"""
+
 import argparse
 import json
 import os
@@ -7,6 +10,7 @@ from data.datasets.multi_domain_dataset import MultiDomainDataset
 from trainers.curriculum_trainer import CurriculumTrainer
 from utils.logging_utils import setup_logger, log_training_progress
 from utils.optimization import get_optimizer, get_scheduler
+from torchvision import transforms
 
 def main(config):
     # Set up logging
@@ -15,6 +19,13 @@ def main(config):
     # Create directories for logs and checkpoints
     os.makedirs(config['log_dir'], exist_ok=True)
     os.makedirs(config['checkpoint_dir'], exist_ok=True)
+
+    # Define the transform variable
+    transform = transforms.Compose([
+        transforms.Resize((config['img_size'], config['img_size'])),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    ])
 
     # Load datasets
     train_dataset = MultiDomainDataset(
@@ -48,8 +59,13 @@ def main(config):
     # Set up criterion
     criterion = torch.nn.CrossEntropyLoss()
 
+    # Handle curriculum learning parameters
+    difficulty_scheduler = None
+    if config.get('curriculum', {}).get('enabled', False):
+        difficulty_scheduler = config.get('curriculum', {}).get('stages', [])
+
     # Initialize trainer
-    trainer = CurriculumTrainer(model, optimizer, criterion, train_loader, val_loader, config['num_epochs'], config['device'], config['difficulty_scheduler'])
+    trainer = CurriculumTrainer(model, optimizer, criterion, train_loader, val_loader, config['num_epochs'], config['device'], difficulty_scheduler)
 
     # Train the model
     for epoch in range(config['num_epochs']):
