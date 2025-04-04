@@ -1,3 +1,8 @@
+import os
+import sys
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 import argparse
 import torch
 import os
@@ -13,6 +18,8 @@ from utils.config import ConfigManager
 from utils.metrics import calculate_accuracy, calculate_top_k_accuracy, calculate_psnr, calculate_ssim
 from evaluators.visualizers.reconstruction_visualizer import ReconstructionVisualizer
 
+# 更新评估函数
+
 def evaluate(model, dataloader, device, output_dir=None, visualize=False, num_vis_samples=5):
     """评估模型性能"""
     model.eval()
@@ -23,7 +30,9 @@ def evaluate(model, dataloader, device, output_dir=None, visualize=False, num_vi
         'relation_accuracy': [],
         'top5_accuracy': [],
         'psnr': [],
-        'ssim': []
+        'ssim': [],
+        'adjacency_accuracy': [],  # 新增邻接准确率
+        'grid_size_metrics': {}    # 按网格大小分组的指标
     }
     
     # 可视化计数
@@ -31,73 +40,56 @@ def evaluate(model, dataloader, device, output_dir=None, visualize=False, num_vi
     visualizer = ReconstructionVisualizer() if visualize else None
     
     with torch.no_grad():
-        for batch_idx, (shuffled_patches, positions, relations, original_images) in enumerate(tqdm(dataloader)):
-            # 移动数据到设备
-            shuffled_patches = shuffled_patches.to(device)
+        for images, positions in tqdm(dataloader, desc="评估中"):
+            # 获取当前批次的网格大小
+            patch_count = positions.size(1)
+            grid_size = int(np.sqrt(patch_count))
+            
+            # 如果网格大小不在记录中，添加它
+            if grid_size not in metrics['grid_size_metrics']:
+                metrics['grid_size_metrics'][grid_size] = {
+                    'position_accuracy': [],
+                    'relation_accuracy': [],
+                    'adjacency_accuracy': []
+                }
+            
+            images = images.to(device)
             positions = positions.to(device)
-            relations = relations.to(device)
-            original_images = original_images.to(device) if original_images is not None else None
             
             # 模型推理
-            position_logits, relation_logits, reconstructed_images = model(shuffled_patches)
+            position_logits, relation_logits, reconstructed = model(images)
             
-            # 计算指标
-            pos_acc = calculate_accuracy(position_logits, positions)
-            rel_acc = calculate_accuracy(relation_logits, relations) if relations is not None else 0
+            # 计算位置预测准确率
+            position_preds = torch.argmax(position_logits, dim=1)
+            accuracy = calculate_accuracy(position_preds, positions)
+            metrics['position_accuracy'].append(accuracy)
+            metrics['grid_size_metrics'][grid_size]['position_accuracy'].append(accuracy)
+            
+            # 计算Top-5准确率
             top5_acc = calculate_top_k_accuracy(position_logits, positions, k=5)
-            
-            # 图像质量评估
-            psnr_val = calculate_psnr(reconstructed_images, original_images) if original_images is not None else 0
-            ssim_val = calculate_ssim(reconstructed_images, original_images) if original_images is not None else 0
-            
-            # 记录指标
-            metrics['position_accuracy'].append(pos_acc)
-            metrics['relation_accuracy'].append(rel_acc)
             metrics['top5_accuracy'].append(top5_acc)
-            metrics['psnr'].append(psnr_val)
-            metrics['ssim'].append(ssim_val)
             
-            # 可视化
-            if visualize and vis_count < num_vis_samples:
-                for i in range(min(shuffled_patches.size(0), num_vis_samples - vis_count)):
-                    if output_dir:
-                        vis_path = os.path.join(output_dir, f'sample_{vis_count}.png')
-                    else:
-                        vis_path = None
-                        
-                    visualizer.visualize_reconstruction(
-                        original_images[i:i+1] if original_images is not None else None,
-                        shuffled_patches[i:i+1],
-                        reconstructed_images[i:i+1],
-                        grid_size=int(np.sqrt(shuffled_patches.size(1))),
-                        save_path=vis_path
-                    )
-                    vis_count += 1
-                    if vis_count >= num_vis_samples:
-                        break
+            # 计算邻接准确率
+            adj_acc = calculate_adjacency_accuracy(position_preds, positions, grid_size)
+            metrics['adjacency_accuracy'].append(adj_acc)
+            metrics['grid_size_metrics'][grid_size]['adjacency_accuracy'].append(adj_acc)
+            
+            # ... 原有代码 ...
     
     # 计算平均指标
-    results = {
-        'position_accuracy': np.mean(metrics['position_accuracy']).item(),
-        'relation_accuracy': np.mean(metrics['relation_accuracy']).item(),
-        'top5_accuracy': np.mean(metrics['top5_accuracy']).item(),
-        'psnr': np.mean(metrics['psnr']).item(),
-        'ssim': np.mean(metrics['ssim']).item()
-    }
+    result = {}
+    for key in ['position_accuracy', 'relation_accuracy', 'top5_accuracy', 'adjacency_accuracy', 'psnr', 'ssim']:
+        if metrics[key]:
+            result[key] = sum(metrics[key]) / len(metrics[key]) if len(metrics[key]) > 0 else 0
     
-    # 保存结果
-    if output_dir:
-        os.makedirs(output_dir, exist_ok=True)
-        with open(os.path.join(output_dir, 'evaluation_results.json'), 'w') as f:
-            json.dump(results, f, indent=4)
-            
-        # 创建简单的结果可视化
-        plt.figure(figsize=(10, 6))
-        plt.bar(results.keys(), results.values())
-        plt.title('Evaluation Metrics')
-        plt.savefig(os.path.join(output_dir, 'metrics_summary.png'))
+    # 处理按网格大小的指标
+    result['grid_size_metrics'] = {}
+    for grid_size, grid_metrics in metrics['grid_size_metrics'].items():
+        result['grid_size_metrics'][grid_size] = {}
+        for key, values in grid_metrics.items():
+            result['grid_size_metrics'][grid_size][key] = sum(values) / len(values) if len(values) > 0 else 0
     
-    return results
+    return result
 
 def main():
     # 解析命令行参数
@@ -114,6 +106,9 @@ def main():
     # 设置设备
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
+
+    # 检查检查点
+    # inspect_checkpoint(args.checkpoint_path, device)
     
     # 加载配置
     config_manager = ConfigManager()
@@ -122,7 +117,14 @@ def main():
     
     # 加载模型
     model = PuzzleSolver(**model_config)
-    model.load_state_dict(torch.load(args.checkpoint_path, map_location=device))
+    # 修改这一行，从检查点中提取 'model' 键
+    checkpoint = torch.load(args.checkpoint_path, map_location=device, weights_only=True)
+    if isinstance(checkpoint, dict) and 'model' in checkpoint:
+        print("检测到标准检查点格式，正在提取模型状态...")
+        model.load_state_dict(checkpoint['model'])
+    else:
+        # 尝试直接加载（以防某些检查点采用不同格式）
+        model.load_state_dict(checkpoint)
     model.to(device)
     model.eval()
     print(f"Model loaded from {args.checkpoint_path}")
@@ -163,6 +165,17 @@ def main():
     print(f"\nDetailed results saved to {args.output_dir}")
     
     return results
+
+def inspect_checkpoint(checkpoint_path, device):
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
+    if 'config' in checkpoint:
+        print("配置信息:", checkpoint['config'])
+    print("模型状态字典键:", checkpoint['model'].keys())
+    # 打印几个关键层的形状
+    for key in ['transformer_encoder.blocks.0.mlp.fc1.weight', 
+                'position_head.fc.weight']:
+        if key in checkpoint['model']:
+            print(f"{key} 形状: {checkpoint['model'][key].shape}")
 
 if __name__ == '__main__':
     main()

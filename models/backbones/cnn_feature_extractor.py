@@ -19,6 +19,8 @@ class CNNFeatureExtractor(nn.Module):
         self.pool = nn.MaxPool2d(kernel_size=2, stride=2, padding=0)
         self.dropout_layer = nn.Dropout(dropout)
 
+        self.channel_mapping = nn.Conv2d(input_channels, feature_dim, kernel_size=1)
+
         self.adjust_pooling_layers()
 
     def adjust_pooling_layers(self):
@@ -43,10 +45,13 @@ class CNNFeatureExtractor(nn.Module):
         x = self.pool(x)
         x = self.dropout_layer(x)
 
-        x += F.interpolate(original_input, size=x.shape[2:])  # Residual connection
+        mapped_input = self.channel_mapping(original_input)
+        resized_input = F.interpolate(mapped_input, size=x.shape[2:])
+        x = x + resized_input  # 修改后的残差连接
 
         # Adjust output format to ensure compatibility with ViT encoder
         b, c, h, w = x.shape
         x = x.view(b, c, h * w).permute(0, 2, 1)
 
         return x
+    

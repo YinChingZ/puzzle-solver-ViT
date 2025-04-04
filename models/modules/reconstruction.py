@@ -24,17 +24,45 @@ class ReconstructionModule(nn.Module):
         return reconstructed_image, confidence
 
     def _get_position_predictions(self, position_logits):
-        position_preds = torch.argmax(position_logits, dim=1)
-        confidence = torch.max(F.softmax(position_logits, dim=1), dim=1)[0]
+        # 确保我们可以安全地处理该输入
+        if torch.is_floating_point(position_logits):
+            # 浮点型输入，应用正常的softmax处理
+            position_preds = torch.argmax(position_logits, dim=1)
+            confidence = torch.max(F.softmax(position_logits, dim=1), dim=1)[0]
+        else:
+            # 非浮点型输入（可能是索引）
+            position_preds = position_logits
+            
+            # 创建合适的置信度值
+            if position_preds.dim() == 2:
+                # 对于2D张量 [batch, num_patches]
+                confidence = torch.ones(position_preds.size(0), device=position_preds.device)
+            else:
+                # 对于其他形状，创建匹配的置信度张量
+                confidence = torch.ones(position_preds.size(0), device=position_preds.device)
+        
+        print(f"position_logits.shape: {position_logits.shape}, dtype: {position_logits.dtype}")
+        
         return position_preds, confidence
 
     def _rearrange_patches(self, patches, position_preds):
-        batch_size, num_patches, _ = patches.size()
-        grid_size = int(num_patches ** 0.5)
+        batch_size, num_patches, feature_dim = patches.size()
+        
+        # 将位置预测转换为长整型并限制在有效范围内
+        position_preds = torch.clamp(position_preds.long(), 0, num_patches - 1)
+        
+        # 初始化输出张量
         rearranged_patches = torch.zeros_like(patches)
-        for i in range(batch_size):
-            for j in range(num_patches):
-                rearranged_patches[i, position_preds[i, j]] = patches[i, j]
+        
+        # 创建索引张量用于散布操作
+        batch_indices = torch.arange(batch_size, device=patches.device).view(-1, 1).repeat(1, num_patches)
+        
+        # 扩展位置索引以匹配特征维度
+        position_indices = position_preds.unsqueeze(-1).expand(-1, -1, feature_dim)
+        
+        # 使用scatter操作一次性重新排列所有图像块
+        rearranged_patches.scatter_(1, position_indices, patches)
+        
         return rearranged_patches
 
     def _smooth_edges(self, patches):
@@ -57,7 +85,26 @@ class ReconstructionModule(nn.Module):
 
     def _reconstruct_image(self, patches):
         batch_size, num_patches, patch_dim = patches.size()
+        
+        # 检查是否包含类别标记（如果序列长度-1是完全平方数）
+        seq_len_without_cls = num_patches - 1
+        grid_size_candidate = int(seq_len_without_cls ** 0.5)
+        
+        if grid_size_candidate ** 2 == seq_len_without_cls:
+            # 有类别标记，需要移除
+            print(f"Detected class token, removing it. Original shape: {patches.shape}")
+            patches = patches[:, 1:, :]  # 移除第一个标记（通常是类别标记）
+            num_patches = patches.size(1)
+        
+        # 计算网格尺寸
         grid_size = int(num_patches ** 0.5)
+        
+        # 确保是完全平方数
+        if grid_size ** 2 != num_patches:
+            raise ValueError(f"Cannot reshape {num_patches} patches into a square grid. Expected a perfect square.")
+        
+        # 重建图像
+        print(f"Reshaping to: [{batch_size}, {grid_size}, {grid_size}, {patch_dim}], num_patches={num_patches}")
         reconstructed_image = patches.view(batch_size, grid_size, grid_size, patch_dim)
         reconstructed_image = reconstructed_image.permute(0, 3, 1, 2).contiguous()
         return reconstructed_image

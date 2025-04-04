@@ -11,11 +11,29 @@ class BaseTrainer:
         self.val_dataset = val_dataset
         self.batch_size = batch_size
         self.num_epochs = num_epochs
+        
+        # 首先记录接收到的设备参数
+        print(f"BaseTrainer received device: {device}, type: {type(device)}")
+        
+        # 设置设备属性
         self.device = device
-
+        
+        # 确保设备属性是字符串
+        if isinstance(self.device, list):
+            self.device = self.device[0] if len(self.device) > 0 else 'cuda'
+        
+        # 确保我们使用可用的设备
+        if self.device == 'cuda' and not torch.cuda.is_available():
+            print("CUDA不可用，切换到CPU")
+            self.device = 'cpu'
+        
+        # 现在可以安全地打印和使用self.device了
+        print(f"Using device: {self.device}, type: {type(self.device)}")
+        
         self.train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
         self.val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
-
+        
+        # 移动模型到设备
         self.model.to(self.device)
 
     def train(self):

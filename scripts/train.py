@@ -3,8 +3,11 @@
 
 import argparse
 import os
+import sys
 import torch
 from torch.utils.data import DataLoader
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from models.puzzle_solver import PuzzleSolver
 from data.datasets.multi_domain_dataset import MultiDomainDataset
 from trainers.curriculum_trainer import CurriculumTrainer
@@ -12,6 +15,29 @@ from utils.logging_utils import setup_logger, log_training_progress
 from utils.optimization import get_optimizer, get_scheduler
 from utils.config import ConfigManager
 from torchvision import transforms
+
+def create_dataloaders(train_dataset, val_dataset, batch_size, num_workers=4):
+    """创建优化的数据加载器"""
+    train_loader = DataLoader(
+        train_dataset, 
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_workers,  # 并行加载
+        pin_memory=True,          # 加速GPU传输
+        prefetch_factor=2,        # 预取倍数
+        persistent_workers=True   # 保持工作进程
+    )
+    
+    val_loader = DataLoader(
+        val_dataset, 
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=True,
+        persistent_workers=True
+    )
+    
+    return train_loader, val_loader
 
 def main(args):
     # 加载配置
@@ -47,8 +73,15 @@ def main(args):
     )
 
     # Create data loaders
-    train_loader = DataLoader(train_dataset, batch_size=config['batch_size'], shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=config['batch_size'], shuffle=False)
+    # 根据系统CPU核心数选择合适的num_workers
+    num_workers = min(8, os.cpu_count() or 4)
+
+    train_loader, val_loader = create_dataloaders(
+        train_dataset, 
+        val_dataset, 
+        config['batch_size'], 
+        num_workers=num_workers
+    )
 
     # Initialize model
     model = PuzzleSolver(
@@ -72,6 +105,7 @@ def main(args):
     difficulty_scheduler = None
     if config.get('curriculum', {}).get('enabled', False):
         difficulty_scheduler = config.get('curriculum', {}).get('stages', [])
+        print(difficulty_scheduler)
 
     # Initialize trainer
     trainer = CurriculumTrainer(model, optimizer, criterion, train_loader, val_loader, config['num_epochs'], config['device'], difficulty_scheduler)

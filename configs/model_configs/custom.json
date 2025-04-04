@@ -1,0 +1,14 @@
+{
+    "img_size": 192,
+    "patch_size": 16,
+    "grid_size": 12,
+    "num_classes": 144,
+    "embed_dim": 192,
+    "depth": 3,
+    "num_heads": 3,
+    "mlp_ratio": 4.0,
+    "qkv_bias": true,
+    "drop_rate": 0.1,
+    "attn_drop_rate": 0.1,
+    "drop_path_rate": 0.1
+}

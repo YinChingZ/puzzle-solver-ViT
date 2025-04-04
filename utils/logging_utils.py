@@ -2,8 +2,14 @@ import logging
 import os
 
 def setup_logger(name, log_file, level=logging.INFO):
-    """Function to set up a logger with the specified name, log file, and level."""
-    formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
+    """设置日志记录器"""
+    # 确保日志目录存在
+    log_dir = os.path.dirname(log_file)
+    if not os.path.exists(log_dir):
+        os.makedirs(log_dir)
+        
+    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+
     handler = logging.FileHandler(log_file)
     handler.setFormatter(formatter)
 

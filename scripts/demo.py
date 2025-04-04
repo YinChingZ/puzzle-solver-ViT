@@ -6,6 +6,7 @@ import os
 import sys
 import torchvision.transforms as transforms
 
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from models.puzzle_solver import PuzzleSolver
 from utils.config import ConfigManager
 from evaluators.visualizers.attention_visualizer import AttentionVisualizer
@@ -59,16 +60,41 @@ def main():
         
         # 合并grid_size到配置
         model_config['grid_size'] = args.grid_size
-        
+
+        # 过滤掉不支持的参数
+        if 'cnn_feature_extractor' in model_config:
+            del model_config['cnn_feature_extractor']
+        # 可能还需要过滤其他不支持的参数
+        for key in list(model_config.keys()):
+            if key not in ["img_size", "patch_size", "num_classes", "embed_dim", 
+                        "depth", "num_heads", "mlp_ratio", "qkv_bias", "qk_scale", 
+                        "drop_rate", "attn_drop_rate", "drop_path_rate", "norm_layer", 
+                        "grid_size"]:
+                del model_config[key]
+
+        # 初始化模型
+        config_manager = ConfigManager()
+        model_config = config_manager.load_config("model", "custom")  # 使用与训练相同的配置
+
         # 初始化模型
         model = PuzzleSolver(**model_config)
-        
-        # 如果提供了检查点，加载权重
+
+        # 修改加载模型权重的部分（大约在第92行）
         if args.checkpoint_path:
             if not os.path.exists(args.checkpoint_path):
                 raise FileNotFoundError(f"模型检查点不存在: {args.checkpoint_path}")
             
-            model.load_state_dict(torch.load(args.checkpoint_path, map_location=device))
+            # 加载检查点
+            checkpoint = torch.load(args.checkpoint_path, map_location=device, weights_only=True)
+            
+            # 检查检查点格式并适当提取模型权重
+            if isinstance(checkpoint, dict) and 'model' in checkpoint:
+                print("检测到标准检查点格式，正在提取模型状态...")
+                model.load_state_dict(checkpoint['model'])
+            else:
+                # 尝试直接加载
+                model.load_state_dict(checkpoint)
+            
             print(f"成功从 {args.checkpoint_path} 加载模型权重")
         else:
             print("警告: 未提供模型检查点，使用随机初始化的权重")
@@ -91,25 +117,72 @@ def main():
         
         print(f"已生成 {args.grid_size}x{args.grid_size} 网格的拼图，难度: {args.difficulty}")
         
+        print(f"Patches shape: {patches.shape}")
+        print(f"Positions shape: {positions.shape}")
+        print(f"Shuffled patches shape: {shuffled_patches.shape}")
+        print(f"Shuffled positions shape: {shuffled_positions.shape}")
+
         # 模型推理
+        # 修改模型推理部分（大约在第137行）
         with torch.no_grad():
-            position_logits, relation_logits, reconstructed_image = model(shuffled_patches)
+            # 重塑拼图块张量以适应卷积层输入
+            b, n, c, h, w = shuffled_patches.shape
+            shuffled_patches_reshaped = shuffled_patches.view(b*n, c, h, w).to(device)
+            
+            # 修改位置标签以匹配批处理后的大小，并确保在同一设备上
+            positions_reshaped = positions.flatten().to(device)
+            
+            # 传递重塑后的数据到模型
+            position_logits, relation_logits, reconstructed_image = model(shuffled_patches_reshaped)
+            
+            # 打印形状信息以帮助调试
+            print(f"Position logits shape: {position_logits.shape}")
+            print(f"Positions_reshaped shape: {positions_reshaped.shape}")
             
             # 计算位置预测准确率
             position_preds = torch.argmax(position_logits, dim=1)
-            accuracy = (position_preds == positions).float().mean().item()
+            accuracy = (position_preds == positions_reshaped).float().mean().item()
             print(f"位置预测准确率: {accuracy:.2%}")
         
-        # 可视化结果
+        # 修改可视化结果部分
         print("生成可视化结果...")
         visualizer = ReconstructionVisualizer()
+
+        # 将拼图块组合成完整图像
+        def assemble_image_from_patches(patches, grid_size):
+            """将拼图块组合成完整图像"""
+            b, n, c, h, w = patches.shape
+            rows = []
+            for i in range(grid_size):
+                row_patches = []
+                for j in range(grid_size):
+                    idx = i * grid_size + j
+                    row_patches.append(patches[0, idx])
+                row = torch.cat(row_patches, dim=2)  # 水平连接
+                rows.append(row)
+            assembled = torch.cat(rows, dim=1)  # 垂直连接
+            return assembled.unsqueeze(0)  # 添加批次维度 [1, C, H, W]
+
+        # 组装原始图像、打乱的图像和重建的图像
+        original_assembled = assemble_image_from_patches(patches, args.grid_size)
+        shuffled_assembled = assemble_image_from_patches(shuffled_patches, args.grid_size)
+
+        # 确保所有输入都在同一设备上
+        image_tensor_cpu = image_tensor.cpu()
+        original_assembled_cpu = original_assembled.cpu()
+        shuffled_assembled_cpu = shuffled_assembled.cpu()
+        reconstructed_image_cpu = reconstructed_image.cpu()
+
+        # 传递组合后的图像给可视化器
         visualizer.visualize_reconstruction(
-            image_tensor,
-            shuffled_patches,
-            reconstructed_image,
+            image_tensor_cpu,  # 原始图像
+            shuffled_assembled_cpu,  # 打乱的拼图
+            reconstructed_image_cpu,  # 重建的图像
             grid_size=args.grid_size,
             save_path=args.output_path
         )
+        
+        print(f"Reconstructed image shape: {reconstructed_image.shape}")
         
         # 如果需要，显示注意力图
         if args.show_attention:

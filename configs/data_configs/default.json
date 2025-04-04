@@ -5,11 +5,11 @@
   "test_ratio": 0.15,
   "grid_size": 4,
   "patch_size": 16,
-  "img_size": 224,
+  "img_size": 192,
   "augmentations": {
     "color_jitter": true,
     "random_crop": true,
-    "random_rotation": true,
+    "random_rotation": false,
     "random_flip": true
   },
   "domain_sources": [
@@ -17,6 +17,7 @@
     "artwork",
     "documents"
   ],
-  "train_dirs": ["path/to/train/data"],
-  "val_dirs": ["path/to/val/data"]
+  "train_dirs": ["/data/train"],
+  "val_dirs": ["/data/val"],
+  "test_dirs": ["data/test"]
 }

@@ -6,6 +6,8 @@ def get_optimizer(model, optimizer_name='adam', learning_rate=0.001, weight_deca
         return optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
     elif optimizer_name.lower() == 'sgd':
         return optim.SGD(model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=weight_decay)
+    elif optimizer_name.lower() == 'adamw':
+        return optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
     else:
         raise ValueError(f'Unsupported optimizer: {optimizer_name}')
 
@@ -23,7 +25,7 @@ def warmup_learning_rate(optimizer, warmup_epochs, initial_lr, current_epoch):
             param_group['lr'] = lr
 
 def get_scheduler(optimizer, scheduler_name='cosine', T_max=50, eta_min=0):
-    if scheduler_name.lower() == 'cosine':
+    if scheduler_name.lower() == 'cosine' or scheduler_name.lower() == 'cosineannealinglr':
         return optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=T_max, eta_min=eta_min)
     elif scheduler_name.lower() == 'step':
         return optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.1)

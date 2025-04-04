@@ -24,17 +24,26 @@ class ViTEncoder(nn.Module):
 
     def forward(self, x):
         B = x.shape[0]
-        x = self.patch_embed(x)
+
+        # 检测输入是 4D 张量 [B, C, H, W] 还是 3D 张量 [B, L, C]
+        if len(x.shape) == 4:  # 原始图像输入 [B, C, H, W]
+            x = self.patch_embed(x)  # 转换为 [B, num_patches, embed_dim]
+        else:  # 特征输入 [B, L, C]
+            # 已经是 [B, num_patches, embed_dim] 格式，不需要 patch embedding
+            pass
+
         cls_tokens = self.cls_token.expand(B, -1, -1)
         x = torch.cat((cls_tokens, x), dim=1)
-        x = x + self.pos_embed
+
+
+        # x = x + self.pos_embed
         x = self.pos_drop(x)
 
         for blk in self.blocks:
             x = blk(x)
         x = self.norm(x)
 
-        return x[:, 0]
+        return x
 
 class PatchEmbed(nn.Module):
     def __init__(self, img_size=224, patch_size=16, in_channels=3, embed_dim=768):

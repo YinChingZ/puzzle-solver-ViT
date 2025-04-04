@@ -87,3 +87,55 @@ class AttentionVisualizer:
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
             
         plt.show()
+        
+    # 改进注意力可视化
+    def visualize_attention_map(self, model, input_tensor, save_path=None, head_idx=0):
+        """更详细的注意力图可视化"""
+        model.eval()
+        
+        # 提取注意力权重
+        attention_maps = []
+        
+        def hook_fn(module, input, output):
+            attention_maps.append(output[1])  # 假设输出的第二个元素是注意力权重
+        
+        # 为所有注意力层注册钩子
+        hooks = []
+        for name, module in model.named_modules():
+            if 'attn' in name and hasattr(module, 'forward'):
+                hook = module.register_forward_hook(hook_fn)
+                hooks.append(hook)
+        
+        # 前向传播
+        with torch.no_grad():
+            _ = model(input_tensor)
+        
+        # 移除钩子
+        for hook in hooks:
+            hook.remove()
+        
+        # 可视化每一层的注意力
+        if attention_maps:
+            fig, axes = plt.subplots(1, len(attention_maps), figsize=(len(attention_maps)*4, 4))
+            if len(attention_maps) == 1:
+                axes = [axes]
+                
+            for i, attn_map in enumerate(attention_maps):
+                # 获取注意力权重 [batch, heads, seq_len, seq_len]
+                if len(attn_map.shape) == 4:
+                    # 选择特定的头和批次
+                    attention = attn_map[0, head_idx].cpu().numpy()
+                    
+                    # 显示注意力热图
+                    im = axes[i].imshow(attention, cmap='viridis')
+                    axes[i].set_title(f'Layer {i+1}, Head {head_idx}')
+                    axes[i].axis('off')
+                    fig.colorbar(im, ax=axes[i])
+            
+            plt.tight_layout()
+            if save_path:
+                plt.savefig(save_path, dpi=300)
+                print(f"注意力图已保存至 {save_path}")
+            plt.show()
+            
+        return attention_maps

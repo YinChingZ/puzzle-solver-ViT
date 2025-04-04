@@ -10,6 +10,7 @@ from data.datasets.multi_domain_dataset import MultiDomainDataset
 from trainers.curriculum_trainer import CurriculumTrainer
 from utils.logging_utils import setup_logger, log_training_progress
 from utils.optimization import get_optimizer, get_scheduler
+from utils.curriculum_scheduler import CurriculumScheduler
 from torchvision import transforms
 
 def main(config):
@@ -62,14 +63,16 @@ def main(config):
     # Handle curriculum learning parameters
     difficulty_scheduler = None
     if config.get('curriculum', {}).get('enabled', False):
-        difficulty_scheduler = config.get('curriculum', {}).get('stages', [])
+        stages = config.get('curriculum', {}).get('stages', [])
+        if stages:
+            difficulty_scheduler = CurriculumScheduler(stages)
 
     # Initialize trainer
     trainer = CurriculumTrainer(model, optimizer, criterion, train_loader, val_loader, config['num_epochs'], config['device'], difficulty_scheduler)
 
     # Train the model
     for epoch in range(config['num_epochs']):
-        trainer.train()
+        trainer.train(epoch)
         val_loss = trainer.validate()
         log_training_progress(logger, epoch, trainer.train_loss, val_loss)
         scheduler.step()

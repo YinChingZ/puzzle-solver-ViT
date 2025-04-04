@@ -178,7 +178,8 @@ __pycache__/
 *.pyc
 
 raw_images/
-
 data/test/
 data/train/
 data/val/
+checkpoints/
+

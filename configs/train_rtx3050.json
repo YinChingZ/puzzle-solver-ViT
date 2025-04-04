@@ -1,0 +1,43 @@
+{
+    "experiment_name": "puzzle_solver_rtx3050",
+    "model_config": "tiny",
+    "data_config": "default",
+    "training_config": "rtx3050",
+    "img_size": 192,
+    "patch_size": 16,
+    "grid_size": 4,
+    "num_classes": 16,
+    "embed_dim": 192,
+    "depth": 3,
+    "num_heads": 3,
+    "mlp_ratio": 3,
+    "batch_size": 8,
+    "num_epochs": 30,
+    "device": "cuda",
+    "log_dir": "logs/rtx3050",
+    "checkpoint_dir": "checkpoints/rtx3050",
+    "checkpoint_interval": 5,
+    "data": {
+        "train_dirs": ["data/train"],
+        "val_dirs": ["data/val"],
+        "test_dirs": ["data/test"]
+    },
+    "optimizer": {
+        "name": "Adam",
+        "lr": 0.0003,
+        "weight_decay": 0.0001
+    },
+    "scheduler": {
+        "name": "CosineAnnealingLR",
+        "T_max": 30,
+        "eta_min": 0.00001
+    },
+    "curriculum": {
+        "enabled": true,
+        "stages": [
+            {"epoch": 0, "difficulty": "easy", "grid_size": 4},
+            {"epoch": 10, "difficulty": "medium", "grid_size": 4},
+            {"epoch": 20, "difficulty": "hard", "grid_size": 4}
+        ]
+    }
+}
