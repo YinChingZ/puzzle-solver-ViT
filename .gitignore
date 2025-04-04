@@ -172,3 +172,13 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Python 项目
+__pycache__/
+*.pyc
+
+raw_images/
+
+data/test/
+data/train/
+data/val/
