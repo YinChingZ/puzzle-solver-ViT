@@ -4,17 +4,24 @@ from PIL import Image
 import torch 
 from torch.utils.data import Dataset
 from torchvision import transforms
+from data.processors.patch_generator import PatchGenerator
 
 class MultiDomainDataset(Dataset):
-    def __init__(self, data_dirs, transform=None, grid_size=4, train_ratio=0.7, val_ratio=0.2, test_ratio=0.1):
-        self.data_dirs = data_dirs
+    def __init__(self, data_dirs, transform=None, img_size=224):
+        self.data_dirs = data_dirs if isinstance(data_dirs, list) else [data_dirs]
         self.transform = transform
-        self.grid_size = grid_size  # 添加这一行
-        self.train_ratio = train_ratio
-        self.val_ratio = val_ratio
-        self.test_ratio = test_ratio
+        self.img_size = img_size
         self.image_paths = self._load_image_paths()
-        self.train_paths, self.val_paths, self.test_paths = self._split_dataset()
+        
+        # 添加拼图块生成器支持
+        self.grid_size = 4  # 默认网格大小
+        self.patch_generator = PatchGenerator(grid_size=self.grid_size)
+    
+    def set_grid_size(self, grid_size):
+        """更新网格大小以支持课程学习"""
+        self.grid_size = grid_size
+        self.patch_generator = PatchGenerator(grid_size=grid_size)
+        print(f"数据集网格大小已更新为: {grid_size}x{grid_size}")
 
     def _load_image_paths(self):
         image_paths = []
@@ -85,22 +92,48 @@ class MultiDomainDataset(Dataset):
         return len(self.image_paths)
 
     def __getitem__(self, idx):
+        # 获取图像路径
         image_path = self.image_paths[idx]
-        original_image = self._load_image(image_path)
         
-        # 创建拼图
-        scrambled_image, position_labels = self._create_puzzle(original_image)
+        try:
+            # 尝试加载图像
+            image = Image.open(image_path).convert('RGB')
+        except Exception as e:
+            print(f"无法加载图像 {image_path}: {str(e)}")
+            # 创建一个默认的黑色图像作为替代
+            image = Image.new('RGB', (self.img_size, self.img_size), color='black')
         
         # 应用变换
         if self.transform:
-            scrambled_image = self.transform(scrambled_image)
-        
-        # 添加新的预处理方法
-        if self.transform:
             image = self.transform(image)
-        else:
-            # 默认使用强增强
-            augmenter = PuzzleAugmentation(img_size=224, strong_aug=True)
-            image = augmenter(image)
         
-        return scrambled_image, position_labels
+        # 生成拼图块并立即重组为完整图像
+        if hasattr(self, 'patch_generator'):
+            patches, positions = self.patch_generator.generate_patches(image)
+            
+            # 重组拼图块为完整图像
+            batch_size, num_patches, channels, patch_h, patch_w = patches.shape
+            grid_size = int(num_patches ** 0.5)
+            img_h, img_w = grid_size * patch_h, grid_size * patch_w
+            
+            # 创建重组图像
+            recomposed_image = torch.zeros(batch_size, channels, img_h, img_w, device=patches.device)
+            
+            # 填充图像
+            for b in range(batch_size):
+                for i in range(grid_size):
+                    for j in range(grid_size):
+                        patch_idx = i * grid_size + j
+                        y_start = i * patch_h
+                        y_end = (i+1) * patch_h
+                        x_start = j * patch_w
+                        x_end = (j+1) * patch_w
+                        
+                        recomposed_image[b, :, y_start:y_end, x_start:x_end] = patches[b, patch_idx]
+            
+            # 返回重组的图像和位置信息
+            return recomposed_image, positions
+        
+        # 如果没有patch_generator，返回原始图像和默认位置
+        dummy_positions = torch.zeros(1)  # 创建一个默认位置
+        return image, dummy_positions

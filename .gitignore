@@ -182,4 +182,8 @@ data/test/
 data/train/
 data/val/
 checkpoints/
-
+logs/tensorboard/
+trainers/__pycache__/
+utils/__pycache__/
+models/heads/__pycache__/
+models/__pycache__/

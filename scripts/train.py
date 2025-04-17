@@ -5,6 +5,7 @@ import argparse
 import os
 import sys
 import torch
+torch.cuda.empty_cache()
 from torch.utils.data import DataLoader
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -16,7 +17,7 @@ from utils.optimization import get_optimizer, get_scheduler
 from utils.config import ConfigManager
 from torchvision import transforms
 
-def create_dataloaders(train_dataset, val_dataset, batch_size, num_workers=4):
+def create_dataloaders(train_dataset, val_dataset, batch_size, num_workers=1):  # 减少workers
     """创建优化的数据加载器"""
     train_loader = DataLoader(
         train_dataset, 
@@ -24,7 +25,7 @@ def create_dataloaders(train_dataset, val_dataset, batch_size, num_workers=4):
         shuffle=True,
         num_workers=num_workers,  # 并行加载
         pin_memory=True,          # 加速GPU传输
-        prefetch_factor=2,        # 预取倍数
+        prefetch_factor=1,        # 减小预取因子
         persistent_workers=True   # 保持工作进程
     )
     
@@ -47,6 +48,9 @@ def main(args):
         data_name=args.data_config,
         training_name=args.training_config
     )
+
+    # 在train.py中将批大小降低
+    config['batch_size'] = max(8, config['batch_size'] // 2)  # 将批大小减半，但不小于8
 
     # Set up logging
     logger = setup_logger('train_logger', os.path.join(config['log_dir'], 'train.log'))
@@ -96,7 +100,7 @@ def main(args):
 
     # Set up optimizer and scheduler
     optimizer = get_optimizer(model, config['optimizer']['name'], config['optimizer']['lr'], config['optimizer']['weight_decay'])
-    scheduler = get_scheduler(optimizer, config['scheduler']['name'], config['scheduler']['T_max'], config['scheduler']['eta_min'])
+    scheduler = get_scheduler(optimizer, config['scheduler']['name'], **config['scheduler'])
 
     # Set up criterion
     criterion = torch.nn.CrossEntropyLoss()

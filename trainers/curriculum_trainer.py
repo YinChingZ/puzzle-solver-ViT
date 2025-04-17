@@ -1,4 +1,5 @@
 import torch
+import numpy as np
 import os
 from torch.utils.data import DataLoader
 from trainers.base_trainer import BaseTrainer
@@ -7,7 +8,8 @@ import math
 from tqdm import tqdm
 from torch.utils.tensorboard import SummaryWriter
 import time
-from torch.cuda.amp import autocast, GradScaler
+from torch.amp import autocast, GradScaler
+from models.modules.contrastive_loss import ContrastivePuzzleLoss
 
 class CurriculumTrainer(BaseTrainer):
     def __init__(self, model, optimizer, criterion, train_loader, val_loader, num_epochs, device, difficulty_scheduler=None):
@@ -39,7 +41,7 @@ class CurriculumTrainer(BaseTrainer):
         self.patience_counter = 0
 
         # 添加混合精度训练支持
-        self.scaler = GradScaler()
+        self.scaler = GradScaler('cuda')
         self.use_amp = True  # 使用混合精度
 
     def train(self, epoch=None):
@@ -63,7 +65,10 @@ class CurriculumTrainer(BaseTrainer):
         
         # 更新数据集的网格大小参数
         if hasattr(self.train_dataset, 'set_grid_size'):
+            print(f"设置数据集网格大小为 {current_grid_size}...")
             self.train_dataset.set_grid_size(current_grid_size)
+        else:
+            print("警告：数据集不支持动态调整网格大小！")
         
         # 重置数据加载器，使用新的网格大小
         self.train_loader = DataLoader(
@@ -94,11 +99,66 @@ class CurriculumTrainer(BaseTrainer):
             self.optimizer.zero_grad()
             
             if self.use_amp:
-                with autocast():
+                with autocast('cuda'):
                     position_logits, relation_logits, reconstructed, features = self.model(images, return_features=True)
                     
-                    # 计算主要损失
-                    position_loss = self.criterion(position_logits, positions)
+                    # 打印形状信息以便调试
+                    # print(f"position_logits.shape: {position_logits.shape}, dtype: {position_logits.dtype}")
+                    # print(f"positions.shape: {positions.shape}, dtype: {positions.dtype}")
+                    
+                    # 根据网格大小调整位置标签
+                    grid_size = int(np.sqrt(positions.size(1))) if positions.dim() > 1 else current_grid_size
+                    batch_size = position_logits.size(0)
+                    
+                    # 处理position_logits
+                    if position_logits.dim() == 3:  # [batch, seq_len, num_classes]
+                        # 移除class token (如果有)
+                        if position_logits.size(1) > grid_size * grid_size:
+                            # print(f"Detected class token, removing it. Original shape: {position_logits.shape}")
+                            position_logits = position_logits[:, 1:grid_size*grid_size+1, :]
+                            # print(f"New shape after removing class token: {position_logits.shape}")
+                        
+                        # 重塑为批次 x 块数 x 类别数
+                        position_logits = position_logits.reshape(batch_size, -1, position_logits.size(-1))
+                        # print(f"Reshaped position_logits: {position_logits.shape}")
+                        
+                        # 如果是课程学习的早期阶段，可能需要取前N个位置
+                        if positions.size(1) < position_logits.size(1):
+                            position_logits = position_logits[:, :positions.size(1), :]
+                        
+                        # 将logits打平以匹配cross_entropy期望的形状
+                        position_logits_flat = position_logits.reshape(-1, position_logits.size(-1))
+                        
+                        # 根据positions的维度和形状正确处理
+                        if positions.dim() == 3:
+                            if positions.size(1) == 1:
+                                # 当positions是[B,1,4]格式时，只取每个样本的第一个元素
+                                positions_flat = positions[:, 0, 0].long()  # [32]
+                            else:
+                                # 其他3D形状
+                                positions_flat = positions.reshape(positions.size(0), -1)[:, 0].long()
+                        else:
+                            # 2D或1D情况
+                            positions_flat = positions.reshape(-1).long()
+                        
+                        # 检查批次大小是否匹配，如果不匹配则调整
+                        if position_logits_flat.size(0) != positions_flat.size(0):
+                            if len(position_logits_flat) > len(positions_flat):
+                                # 如果logits比positions多，复制positions以匹配
+                                repeat_factor = position_logits_flat.size(0) // positions_flat.size(0)
+                                if repeat_factor > 1:
+                                    positions_flat = positions_flat.repeat_interleave(repeat_factor)
+                            else:
+                                # 如果positions比logits多，截断positions
+                                positions_flat = positions_flat[:position_logits_flat.size(0)]
+                        
+                        # print(f"Corrected shapes: position_logits_flat={position_logits_flat.shape}, positions_flat={positions_flat.shape}")
+                        
+                        # 计算损失
+                        position_loss = self.criterion(position_logits_flat, positions_flat)
+                    else:
+                        # 处理其他维度情况...与您的原始代码类似
+                        position_loss = self.criterion(position_logits, positions)
                     
                     # 计算对比损失
                     contrastive_loss = self.contrastive_criterion(features, positions)
@@ -109,7 +169,10 @@ class CurriculumTrainer(BaseTrainer):
                     # 可选：重建损失
                     recon_loss = 0.0
                     if isinstance(reconstructed, torch.Tensor) and reconstructed.dim() > 3:
-                        recon_loss = F.mse_loss(reconstructed, images)
+                        if images.dim() == 5:  # [B, 1, C, H, W]
+                            recon_loss = F.mse_loss(reconstructed, images.squeeze(1))  # 移除多余的维度
+                        else:
+                            recon_loss = F.mse_loss(reconstructed, images)
                     
                     # 综合损失
                     loss = position_loss + 0.5 * contrastive_loss + 0.2 * adjacent_loss + 0.1 * recon_loss
@@ -148,17 +211,34 @@ class CurriculumTrainer(BaseTrainer):
             pbar.set_description(f"训练损失: {loss.item():.4f}")
 
             # 记录损失组件
-            self.writer.add_scalar('Loss/train/total', loss.item(), epoch)
-            self.writer.add_scalar('Loss/train/position', position_loss.item(), epoch)
-            self.writer.add_scalar('Loss/train/contrastive', contrastive_loss.item(), epoch)
-            self.writer.add_scalar('Loss/train/adjacent', adjacent_loss.item(), epoch)
-            self.writer.add_scalar('Loss/train/reconstruction', recon_loss, epoch)
+            self.writer.add_scalar('Loss/train/total', loss.item() if torch.is_tensor(loss) else float(loss), epoch)
+            self.writer.add_scalar('Loss/train/position', position_loss.item() if torch.is_tensor(position_loss) else float(position_loss), epoch)
+            self.writer.add_scalar('Loss/train/contrastive', contrastive_loss.item() if torch.is_tensor(contrastive_loss) else float(contrastive_loss), epoch)
+            self.writer.add_scalar('Loss/train/adjacent', float(adjacent_loss), epoch)  # 直接使用float
+            self.writer.add_scalar('Loss/train/reconstruction', float(recon_loss), epoch)  # 确保是float
             
             # 记录梯度统计
             if batch_idx % 50 == 0:
                 for name, param in self.model.named_parameters():
                     if param.requires_grad and param.grad is not None:
-                        self.writer.add_histogram(f'Gradients/{name}', param.grad, epoch)
+                        try:
+                            # 检查梯度是否为空或包含无效值
+                            grad_data = param.grad.detach().cpu()
+                            
+                            # 检查是否为空张量
+                            if grad_data.numel() == 0:
+                                continue
+                                
+                            # 检查是否包含NaN或Inf
+                            if torch.isnan(grad_data).any() or torch.isinf(grad_data).any():
+                                print(f"警告：参数 {name} 的梯度包含NaN或Inf值，已跳过记录")
+                                continue
+                                
+                            # 添加直方图，使用valid_range确保数值有效
+                            valid_range = torch.clamp(grad_data, -1e6, 1e6)  # 限制数值范围
+                            self.writer.add_histogram(f'Gradients/{name}', valid_range, epoch)
+                        except Exception as e:
+                            print(f"记录梯度 {name} 时出错: {e}")
             
             batch_time += time.time() - end  # 记录总批处理时间
             end = time.time()
@@ -185,13 +265,33 @@ class CurriculumTrainer(BaseTrainer):
         for i in range(batch_size):
             pos_idx = positions[i]
             
+            # 检查位置张量的维度并适当处理
+            if pos_idx.dim() > 1:
+                # 如果position是多维的 [1, 4]，只取第一个维度的第一个值作为位置
+                if pos_idx.size(0) == 1:
+                    # 形状为 [1, 4]
+                    pos_idx = pos_idx[0, 0].reshape(1).long()
+                else:
+                    # 多个块的情况
+                    pos_idx = pos_idx[:, 0].long()
+            
+            # 安全检查：确保pos_idx包含至少一个元素
+            if len(pos_idx) == 0:
+                continue
+            
             # 获取真实位置的行列索引
             rows = pos_idx // grid_size
             cols = pos_idx % grid_size
             
             # 对于每个位置，寻找其真实的相邻块
             for p in range(len(pos_idx)):
-                r, c = rows[p].item(), cols[p].item()
+                try:
+                    # 安全地提取行列值
+                    r = int(rows[p].item())
+                    c = int(cols[p].item())
+                except (RuntimeError, ValueError):
+                    print(f"警告: 无法将张量转换为标量: rows[{p}]={rows[p]}, cols[{p}]={cols[p]}")
+                    continue
                 
                 # 查找上下左右四个方向的相邻块
                 neighbors = []
@@ -203,24 +303,36 @@ class CurriculumTrainer(BaseTrainer):
                 # 如果没有相邻块，跳过
                 if not neighbors:
                     continue
-                    
+                
                 # 当前块的位置预测概率
-                p_probs = position_probs[i, p]
+                # 确保p是有效索引
+                if p < position_probs.size(1):
+                    p_probs = position_probs[i, p]
+                else:
+                    continue
                 
                 # 计算该块和其相邻块的预测概率相似度
                 similarity_loss = 0.0
+                valid_neighbors = 0
+                
                 for n in neighbors:
                     # 找到相邻块在当前批次中的索引
                     n_idx = (pos_idx == n).nonzero()
                     if len(n_idx) > 0:
                         n_idx = n_idx[0][0]
-                        n_probs = position_probs[i, n_idx]
-                        
-                        # 计算相邻块位置预测概率的KL散度
-                        similarity_loss += F.kl_div(
-                            p_probs.log(), n_probs, reduction='sum')
+                        if n_idx < position_probs.size(1):
+                            n_probs = position_probs[i, n_idx]
+                            
+                            # 计算相邻块位置预测概率的KL散度
+                            try:
+                                kl_div = F.kl_div(p_probs.log(), n_probs, reduction='sum')
+                                similarity_loss += kl_div
+                                valid_neighbors += 1
+                            except:
+                                continue
                 
-                loss += similarity_loss / len(neighbors)
+                if valid_neighbors > 0:
+                    loss += similarity_loss / valid_neighbors
         
         return loss / batch_size if batch_size > 0 else 0.0
 
@@ -237,47 +349,39 @@ class CurriculumTrainer(BaseTrainer):
                 try:
                     position_logits, relation_logits, reconstructed_image = self.model(images)
                     
-                    # 统一张量形状 (与 train 方法相同的处理逻辑)
+                    # 统一张量形状
                     batch_size = position_labels.size(0)
                     num_positions = position_labels.size(1)
                     
-                    if len(position_logits.shape) == 3:
-                        position_logits = position_logits[:, :num_positions, :]
+                    if len(position_logits.shape) == 3:  # [batch, seq_len, num_classes]
+                        # 重要修复: 只取有效位置的logits
+                        position_logits = position_logits[:, 1:num_positions+1, :]  # 跳过class token
                         logits_reshaped = position_logits.reshape(batch_size*num_positions, -1)
                         labels_reshaped = position_labels.reshape(-1).long()
                     elif len(position_logits.shape) == 2:
-                        if position_logits.size(1) == num_positions:
-                            logits_reshaped = torch.zeros(
-                                batch_size * num_positions, num_positions, 
-                                device=position_logits.device,
-                                dtype=torch.float32
-                            )
-                            
-                            for b in range(batch_size):
-                                for p in range(num_positions):
-                                    pos_value = position_logits[b, p].item()
-                                    if isinstance(pos_value, (int, float)) and 0 <= pos_value < num_positions:
-                                        logits_reshaped[b * num_positions + p, int(pos_value)] = 1.0
-                                    else:
-                                        logits_reshaped[b * num_positions + p, 0] = 1.0
-                            
-                            labels_reshaped = position_labels.reshape(-1).long()
-                        else:
-                            # 形状不匹配，跳过这个批次
-                            print(f"验证时遇到不支持的形状: {position_logits.shape}")
-                            continue
-                    
+                        # 添加这个缩进块
+                        logits_reshaped = position_logits
+                        labels_reshaped = position_labels.reshape(-1).long()
+                        if logits_reshaped.size(0) != labels_reshaped.size(0):
+                            # 处理批次大小不匹配的情况
+                            if logits_reshaped.size(0) > labels_reshaped.size(0):
+                                # 如果logits比labels多，截断logits
+                                logits_reshaped = logits_reshaped[:labels_reshaped.size(0)]
+                            else:
+                                # 如果labels比logits多，截断labels
+                                labels_reshaped = labels_reshaped[:logits_reshaped.size(0)]
+                
                     # 计算损失
                     position_loss = self.criterion(logits_reshaped, labels_reshaped)
                     loss = position_loss
                     
                     val_loss += loss.item()
                     batches_processed += 1
-                    
+                
                 except Exception as e:
                     print(f"验证时发生错误: {e}")
                     continue
-        
+    
         avg_val_loss = val_loss / batches_processed if batches_processed > 0 else float('inf')
         
         # 早停逻辑

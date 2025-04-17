@@ -1,6 +1,6 @@
 {
     "num_epochs": 50,
-    "batch_size": 64,
+    "batch_size": 32,
     "device": "cuda",
     "checkpoint_interval": 5,
     "log_dir": "logs/enhanced",
@@ -11,6 +11,11 @@
         "name": "AdamW",
         "lr": 0.0005,
         "weight_decay": 0.05
+    },
+    "data": {
+        "train_dirs": ["data/train"],
+        "val_dirs": ["data/val"],
+        "test_dirs": ["data/test"]
     },
     "scheduler": {
         "name": "OneCycleLR",

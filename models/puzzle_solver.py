@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.utils.checkpoint as checkpoint
 
 from models.backbones.cnn_feature_extractor import CNNFeatureExtractor
 from models.backbones.vit_encoder import ViTEncoder, PatchEmbed
@@ -58,23 +59,69 @@ class PuzzleSolver(nn.Module):
         self.reconstruction_module = ReconstructionModule(
             input_dim=embed_dim, 
             output_dim=3, 
-            grid_size=self.grid_size
+            grid_size=self.grid_size,
+            img_size=img_size  # 传递图像尺寸
         )
 
-    def forward(self, x):
-        # CNN 特征提取
+        # 在__init__方法中添加
+        self.use_checkpointing = True  # 启用梯度检查点
+
+    # 修改 forward 方法
+
+    def forward(self, x, return_features=False):
+        # 检查输入格式并进行预处理
+        if x.dim() > 4:  # 如果输入是拼图块格式
+            # 获取批次大小和网格大小
+            batch_size, num_patches = x.shape[0], x.shape[1]
+            grid_size = int(num_patches ** 0.5)  # 假设是方形网格
+            
+            # 重新组合拼图块为一个完整图像
+            if x.dim() == 5:  # [B, N, C, H, W]
+                # 获取相关维度
+                _, _, channels, patch_h, patch_w = x.shape
+                
+                # 创建输出张量
+                img_h, img_w = grid_size * patch_h, grid_size * patch_w
+                x_reshaped = torch.zeros(batch_size, channels, img_h, img_w, device=x.device)
+                
+                # 重新排列拼图块
+                for b in range(batch_size):
+                    for i in range(grid_size):
+                        for j in range(grid_size):
+                            patch_idx = i * grid_size + j
+                            y_start = i * patch_h
+                            y_end = (i+1) * patch_h
+                            x_start = j * patch_w
+                            x_end = (j+1) * patch_w
+                            
+                            x_reshaped[b, :, y_start:y_end, x_start:x_end] = x[b, patch_idx]
+                
+                # 更新x为重组后的图像
+                x = x_reshaped
+                # print(f"重组拼图块为完整图像: {x.shape}")
+        
+        # 原有的前向传播逻辑
         features = self.cnn_feature_extractor(x)
         
-        # 通过 transformer 编码器
-        encoded_features = self.transformer_encoder(features)
+        # 使用梯度检查点优化内存使用
+        if hasattr(self, 'use_checkpointing') and self.use_checkpointing:
+            encoded_features = checkpoint.checkpoint(
+                self.transformer_encoder, 
+                features, 
+                use_reentrant=False,
+                # 添加以下参数以修复警告
+                preserve_rng_state=True
+            )
+        else:
+            encoded_features = self.transformer_encoder(features)
         
         # 获取原始的浮点 logits
         position_logits = self.position_head(encoded_features, return_indices=False)
         relation_logits = self.relation_head(encoded_features)
         
         # 打印更详细的形状信息来调试
-        print(f"Position logits detailed shape: {position_logits.shape}, type: {position_logits.dtype}")
-        print(f"Encoded features shape: {encoded_features.shape}")
+        # print(f"Position logits detailed shape: {position_logits.shape}, type: {position_logits.dtype}")
+        # print(f"Encoded features shape: {encoded_features.shape}")
         
         # 检查维度并适当处理
         if len(position_logits.shape) == 3:  # 如果是3D: [batch_size, seq_len, num_classes]
@@ -104,7 +151,11 @@ class PuzzleSolver(nn.Module):
             encoded_features, position_indices, relation_logits
         )
 
-        return position_logits, relation_logits, reconstructed_image
+        # 根据参数决定是否返回特征
+        if return_features:
+            return position_logits, relation_logits, reconstructed_image, encoded_features
+        else:
+            return position_logits, relation_logits, reconstructed_image
 
     # 添加预训练模型加载功能
     def load_pretrained(self, pretrained_path=None):

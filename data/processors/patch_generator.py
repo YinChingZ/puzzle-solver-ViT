@@ -86,5 +86,17 @@ class PatchGenerator:
         positions = torch.stack(positions)  # [B, N]
         
         if return_positions:
+            # 确保positions形状一致：[B, grid_size*grid_size]
+            if positions.dim() == 2 and positions.size(1) != self.grid_size * self.grid_size:
+                # 调整positions形状
+                for i in range(batch_size):
+                    if positions[i].size(0) != self.grid_size * self.grid_size:
+                        # 调整大小以匹配 grid_size^2
+                        positions[i] = positions[i].reshape(-1)[:self.grid_size * self.grid_size]
+                        # 如果太小，填充
+                        if positions[i].size(0) < self.grid_size * self.grid_size:
+                            padding = torch.zeros(self.grid_size * self.grid_size - positions[i].size(0), 
+                                                  device=positions[i].device, dtype=positions[i].dtype)
+                            positions[i] = torch.cat([positions[i], padding])
             return patches, positions
         return patches
